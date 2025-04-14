@@ -6,12 +6,10 @@ import re
 import warnings
 warnings.filterwarnings("ignore")
 
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, IsolationForest
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.ensemble import IsolationForest
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
 
@@ -26,9 +24,8 @@ df.dropna(inplace=True)
 # Feature Engineering
 # =======================
 print("\n=== FEATURE ENGINEERING ===")
-# Log-transform likes
-df['likes_log'] = np.log1p(df['likes'])  # log(1 + likes)
-df['likes_original'] = df['likes']       # keep original likes for visualization
+# Keep original likes for visualization
+df['likes_original'] = df['likes']
 
 # Clean and process prompt text
 df['prompt_clean'] = df['prompt'].apply(lambda x: re.sub(r'[^a-zA-Z ]', '', str(x).lower()))
@@ -42,20 +39,17 @@ tfidf_df = pd.DataFrame(tfidf_matrix, columns=[f'tfidf_{i}' for i in range(tfidf
 # Combine TF-IDF with original dataframe
 df = pd.concat([df.reset_index(drop=True), tfidf_df.reset_index(drop=True)], axis=1)
 
-# Add interaction term
-df['gpu_likes_interaction'] = df['gpu_usage'] * df['likes']
-
 # =======================
 # Dimensionality Reduction (PCA)
 # =======================
 print("\n=== DIMENSIONALITY REDUCTION ===")
 # Define columns to drop
-drop_cols = ['prompt', 'prompt_clean', 'likes_log', 'likes_original']
+drop_cols_pca = ['prompt', 'prompt_clean', 'likes_original', 'likes']
 if 'image_id' in df.columns:
-    drop_cols.append('image_id')
+    drop_cols_pca.append('image_id')
 
 # Get numerical features for PCA
-X_for_pca = df.drop(columns=drop_cols).select_dtypes(include=[np.number])
+X_for_pca = df.drop(columns=drop_cols_pca).select_dtypes(include=[np.number])
 
 # Scale features
 scaler_pca = StandardScaler()
@@ -67,108 +61,14 @@ X_pca = pca.fit_transform(X_pca_scaled)
 
 # Save PCA plot
 plt.figure(figsize=(8, 5))
-plt.scatter(X_pca[:, 0], X_pca[:, 1], c=df['likes_log'], cmap='coolwarm', s=10)
-plt.colorbar(label='Log(Likes)')
+plt.scatter(X_pca[:, 0], X_pca[:, 1], c=df['likes'], cmap='coolwarm', s=10)
+plt.colorbar(label='Likes')
 plt.title("PCA - Feature Reduction Visualization")
 plt.xlabel("PC1")
 plt.ylabel("PC2")
 plt.tight_layout()
 plt.savefig("pca_visualization.png")
 plt.close()
-
-# =======================
-# Likes Prediction Modeling
-# =======================
-print("\n=== LIKES PREDICTION MODELING ===")
-target_likes = 'likes_log'
-
-# Prepare feature set for likes prediction
-drop_cols_likes = ['style_accuracy_score', 'prompt', 'prompt_clean', 'likes_log', 'likes_original']
-if 'image_id' in df.columns:
-    drop_cols_likes.append('image_id')
-
-X_likes = df.drop(columns=drop_cols_likes).select_dtypes(include=[np.number])
-y_likes = df[target_likes]
-
-# Scale features
-scaler_likes = StandardScaler()
-X_likes_scaled = scaler_likes.fit_transform(X_likes)
-
-# Train-Test Split for likes prediction
-X_train_likes, X_test_likes, y_train_likes, y_test_likes = train_test_split(
-    X_likes_scaled, y_likes, test_size=0.2, random_state=42
-)
-
-# =======================
-# Evaluation Function
-# =======================
-def evaluate_model(y_true, y_pred, model_name):
-    mse = mean_squared_error(y_true, y_pred)
-    rmse = np.sqrt(mse)
-    mae = mean_absolute_error(y_true, y_pred)
-    r2 = r2_score(y_true, y_pred)
-    print(f"\n[{model_name}] Evaluation Metrics:")
-    print(f"  MSE  : {mse:.4f}")
-    print(f"  RMSE : {rmse:.4f}")
-    print(f"  MAE  : {mae:.4f}")
-    print(f"  R²   : {r2:.4f}")
-    return {"MSE": mse, "RMSE": rmse, "MAE": mae, "R²": r2}
-
-# =======================
-# Likes Prediction Models
-# =======================
-print("\n=== TRAINING LIKES PREDICTION MODELS ===")
-# Linear Regression
-lr_likes = LinearRegression()
-lr_likes.fit(X_train_likes, y_train_likes)
-y_pred_lr_likes = lr_likes.predict(X_test_likes)
-lr_likes_metrics = evaluate_model(y_test_likes, y_pred_lr_likes, "Linear Regression (Likes)")
-
-# Grid Search for Random Forest
-print("\n=== HYPERPARAMETER TUNING FOR RANDOM FOREST ===")
-rf_grid = {
-    'n_estimators': [100, 150],
-    'max_depth': [None, 10, 20],
-    'min_samples_split': [2, 5]
-}
-rf_gs = GridSearchCV(RandomForestRegressor(random_state=42), rf_grid, cv=3, scoring='neg_mean_squared_error')
-rf_gs.fit(X_train_likes, y_train_likes)
-rf_best = rf_gs.best_estimator_
-y_pred_rf_likes = rf_best.predict(X_test_likes)
-rf_likes_metrics = evaluate_model(y_test_likes, y_pred_rf_likes, "Tuned Random Forest (Likes)")
-
-# Grid Search for Gradient Boosting
-print("\n=== HYPERPARAMETER TUNING FOR GRADIENT BOOSTING ===")
-gb_grid = {
-    'n_estimators': [100],
-    'learning_rate': [0.1, 0.05],
-    'max_depth': [3, 5]
-}
-gb_gs = GridSearchCV(GradientBoostingRegressor(random_state=42), gb_grid, cv=3, scoring='neg_mean_squared_error')
-gb_gs.fit(X_train_likes, y_train_likes)
-gb_best = gb_gs.best_estimator_
-y_pred_gb_likes = gb_best.predict(X_test_likes)
-gb_likes_metrics = evaluate_model(y_test_likes, y_pred_gb_likes, "Gradient Boosting (Tuned, Likes)")
-
-# Feature Importance Analysis
-print("\n=== FEATURE IMPORTANCE ANALYSIS ===")
-importances = rf_best.feature_importances_
-important_indices = np.argsort(importances)[::-1][:20]
-important_features = X_likes.columns[important_indices]
-
-# Print top 10 important features
-print("\nTop 10 Important Features for Likes Prediction:")
-for i, feature in enumerate(important_features[:10]):
-    print(f"{i+1}. {feature}: {importances[important_indices[i]]:.4f}")
-
-# RF with Top 20 Features
-X_important = X_likes[important_features]
-X_imp_scaled = scaler_likes.fit_transform(X_important)
-X_train_imp, X_test_imp, y_train_imp, y_test_imp = train_test_split(X_imp_scaled, y_likes, test_size=0.2, random_state=42)
-rf_imp = RandomForestRegressor(random_state=42)
-rf_imp.fit(X_train_imp, y_train_imp)
-y_pred_imp = rf_imp.predict(X_test_imp)
-rf_imp_metrics = evaluate_model(y_test_imp, y_pred_imp, "RF with Top 20 Important Features (Likes)")
 
 # =======================
 # Anomaly Detection on GPU Usage
@@ -184,7 +84,7 @@ print(f"\n[Anomaly Detection] Total anomalies detected in GPU usage: {total_anom
 # =======================
 print("\n=== CLUSTERING ANALYSIS ===")
 # Define features for clustering
-clustering_features = ['gpu_usage', 'likes_log', 'style_accuracy_score']
+clustering_features = ['gpu_usage', 'likes', 'style_accuracy_score']
 X_cluster = df[clustering_features]
 X_cluster_scaled = StandardScaler().fit_transform(X_cluster)
 
@@ -322,20 +222,6 @@ print("\n" + "="*60)
 print("🔍 FINAL PROJECT SUMMARY: AI Ghibli Art Engagement Analysis")
 print("="*60)
 
-# 📊 Likes Prediction Regression Summary
-print("\n📊 Likes Prediction Model Results:")
-likes_results = {
-    "Linear Regression": lr_likes_metrics,
-    "Tuned Random Forest": rf_likes_metrics,
-    "Gradient Boosting (Tuned)": gb_likes_metrics,
-    "RF (Top 20 Features)": rf_imp_metrics
-}
-
-for model, metrics in likes_results.items():
-    print(f"\n🔹 {model}:")
-    for metric, value in metrics.items():
-        print(f"   {metric: <6}: {value:.4f}")
-
 # 🚨 Anomaly Detection Summary
 print(f"\n🚨 Anomaly Detection:")
 print(f"   ➤ Total anomalies in GPU usage: {total_anomalies}")
@@ -355,7 +241,6 @@ print(top_by_likes_multi[['platform', 'gpu_usage_rounded', 'resolution', 'top_ke
 
 # Data Info
 print(f"\nData Loaded from: {df.shape[0]} rows and {df.shape[1]} columns.")
-print(f"Important Features for Likes Prediction: {important_features[:10].to_list()}")
 print(f"Clusters identified: {df['cluster'].nunique()} unique clusters.")
 print(f"Top Common Keyword Combinations: {df['top_keywords'].value_counts().head(5).index.tolist()}")
 
